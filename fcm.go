@@ -38,6 +38,7 @@ const (
 	CCSReceipt  = "receipt"
 	httpAddress = "https://fcm.googleapis.com/fcm/send"
 	xmppHost    = "fcm-xmpp.googleapis.com"
+	xmppDomain  = "gcm.googleapis.com"
 	xmppPort    = "5235"
 	xmppAddress = xmppHost + ":" + xmppPort
 	// For ccs the min for exponential backoff has to be 1 sec
@@ -602,5 +603,5 @@ func authHeader(apiKey string) string {
 
 // xmppUser generates an xmpp username from a sender ID.
 func xmppUser(senderId string) string {
-	return senderId + "@" + xmppHost
+	return senderId + "@" + xmppDomain
 }
