@@ -164,6 +164,10 @@ type Notification struct {
 // message from CCS (e.g. a delivery receipt).
 type MessageHandler func(cm CcsMessage) error
 
+type AckCounter func() error
+
+type ControlCounter func() error
+
 // httpClient is an interface to stub the http client in tests.
 type httpClient interface {
 	send(apiKey string, m HttpMessage) (*HttpResponse, error)
@@ -272,7 +276,7 @@ func newXmppFcmClient(senderID string, apiKey string) (*xmppFcmClient, error) {
 
 // xmppFcmClient implementation of listening for messages from CCS; the messages can be
 // acks or nacks for messages sent through XMPP, control messages, upstream messages.
-func (c *xmppFcmClient) listen(h MessageHandler, stop <-chan bool) error {
+func (c *xmppFcmClient) listen(h MessageHandler, stop <-chan bool, ackCounter AckCounter, controlCounter ControlCounter) error {
 	if stop != nil {
 		go func() {
 			select {
@@ -300,6 +304,7 @@ func (c *xmppFcmClient) listen(h MessageHandler, stop <-chan bool) error {
 				return nil
 			}
 			// This is likely fatal, so return.
+			fmt.Printf("%T %+v", err, err)
 			return fmt.Errorf("error on Recv>%v", err)
 		}
 		v, ok := stanza.(xmpp.Chat)
@@ -335,6 +340,10 @@ func (c *xmppFcmClient) listen(h MessageHandler, stop <-chan bool) error {
 					}
 					c.messages.Unlock()
 				}
+			case CCSControl:
+				// TODO(silvano): create a new connection, drop the old one 'after a while'
+				go controlCounter()
+				debug("control message! %v", cm)
 			default:
 				debug("Unknown ccs message: %v", cm)
 			}
@@ -348,19 +357,20 @@ func (c *xmppFcmClient) listen(h MessageHandler, stop <-chan bool) error {
 			switch cm.MessageType {
 			case CCSControl:
 				// TODO(silvano): create a new connection, drop the old one 'after a while'
+				go controlCounter()
 				debug("control message! %v", cm)
 			case CCSReceipt:
 				debug("receipt! %v", cm)
 				// Receipt message: send ack and pass to listener.
 				origMessageID := strings.TrimPrefix(cm.MessageId, "dr2:")
 				ack := XmppMessage{To: cm.From, MessageId: origMessageID, MessageType: CCSAck}
-				c.send(ack)
+				c.send(ack,nil)
 				go h(*cm)
 			default:
 				debug("uknown upstream message! %v", cm)
 				// Upstream message: send ack and pass to listener.
 				ack := XmppMessage{To: cm.From, MessageId: cm.MessageId, MessageType: CCSAck}
-				c.send(ack)
+				c.send(ack,ackCounter)
 				go h(*cm)
 			}
 		case "error":
@@ -373,7 +383,7 @@ func (c *xmppFcmClient) listen(h MessageHandler, stop <-chan bool) error {
 
 //TODO(silvano): add flow control (max 100 pending messages at one time)
 // xmppFcmClient implementation to send a message through Fcm Xmpp server (ccs).
-func (c *xmppFcmClient) send(m XmppMessage) (string, int, error) {
+func (c *xmppFcmClient) send(m XmppMessage,ackCounter AckCounter) (string, int, error) {
 	if m.MessageId == "" {
 		m.MessageId = uuid.New()
 	}
@@ -399,6 +409,13 @@ func (c *xmppFcmClient) send(m XmppMessage) (string, int, error) {
 	c.Lock()
 	defer c.Unlock()
 	bytes, err := c.XmppClient.SendOrg(fmt.Sprintf(stanza, bs))
+	if(ackCounter != nil) {
+		if (err != nil) {
+
+		} else {
+			go ackCounter()
+		}
+	}
 	return m.MessageId, bytes, err
 }
 
@@ -410,7 +427,7 @@ func (c *xmppFcmClient) retryMessage(cm CcsMessage, h MessageHandler) {
 		if me.backoff.sendAnother() {
 			go func(m *messageLogEntry) {
 				m.backoff.wait()
-				c.send(*m.body)
+				c.send(*m.body,nil)
 			}(me)
 		} else {
 			debug("Exponential backoff failed over limit for message: ", me)
@@ -581,19 +598,19 @@ func SendXmpp(senderId, apiKey string, m XmppMessage) (string, int, error) {
 	if err != nil {
 		return "", 0, fmt.Errorf("error creating xmpp client>%v", err)
 	}
-	return c.send(m)
+	return c.send(m,nil)
 }
 
 // Listen blocks and connects to FCM waiting for messages, calling the handler
 // for CCS message that can be of interest to the listener: upstream messages, delivery receipt
 // notifications, errors. An optional stop channel can be provided to
 // stop listening.
-func Listen(senderId, apiKey string, h MessageHandler, stop <-chan bool) error {
+func Listen(senderId, apiKey string, h MessageHandler, stop <-chan bool,ackCounter AckCounter,controlCounter ControlCounter) error {
 	cl, err := newXmppFcmClient(senderId, apiKey)
 	if err != nil {
 		return fmt.Errorf("error creating xmpp client>%v", err)
 	}
-	return cl.listen(h, stop)
+	return cl.listen(h, stop, ackCounter,controlCounter)
 }
 
 // authHeader generates an authorization header value for an api key.
