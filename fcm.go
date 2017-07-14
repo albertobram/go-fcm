@@ -364,14 +364,14 @@ func (c *xmppFcmClient) listen(h MessageHandler, stop <-chan bool, ackCounter Ac
 				// Receipt message: send ack and pass to listener.
 				origMessageID := strings.TrimPrefix(cm.MessageId, "dr2:")
 				ack := XmppMessage{To: cm.From, MessageId: origMessageID, MessageType: CCSAck}
-				c.send(ack,nil)
+				c.send(ack,nil,nil,CcsMessage{})
 				go h(*cm)
 			default:
 				debug("uknown upstream message! %v", cm)
 				// Upstream message: send ack and pass to listener.
 				ack := XmppMessage{To: cm.From, MessageId: cm.MessageId, MessageType: CCSAck}
-				c.send(ack,ackCounter)
-				go h(*cm)
+				c.send(ack,ackCounter,h,*cm)
+				//go h(*cm)
 			}
 		case "error":
 			debug("error response %v", v)
@@ -383,7 +383,7 @@ func (c *xmppFcmClient) listen(h MessageHandler, stop <-chan bool, ackCounter Ac
 
 //TODO(silvano): add flow control (max 100 pending messages at one time)
 // xmppFcmClient implementation to send a message through Fcm Xmpp server (ccs).
-func (c *xmppFcmClient) send(m XmppMessage,ackCounter AckCounter) (string, int, error) {
+func (c *xmppFcmClient) send(m XmppMessage,ackCounter AckCounter,h MessageHandler,cm CcsMessage) (string, int, error) {
 	if m.MessageId == "" {
 		m.MessageId = uuid.New()
 	}
@@ -414,6 +414,9 @@ func (c *xmppFcmClient) send(m XmppMessage,ackCounter AckCounter) (string, int, 
 
 		} else {
 			go ackCounter()
+			if(h != nil){
+				go h(cm)
+			}
 		}
 	}
 	return m.MessageId, bytes, err
@@ -427,7 +430,7 @@ func (c *xmppFcmClient) retryMessage(cm CcsMessage, h MessageHandler) {
 		if me.backoff.sendAnother() {
 			go func(m *messageLogEntry) {
 				m.backoff.wait()
-				c.send(*m.body,nil)
+				c.send(*m.body,nil,nil,CcsMessage{})
 			}(me)
 		} else {
 			debug("Exponential backoff failed over limit for message: ", me)
@@ -598,7 +601,7 @@ func SendXmpp(senderId, apiKey string, m XmppMessage) (string, int, error) {
 	if err != nil {
 		return "", 0, fmt.Errorf("error creating xmpp client>%v", err)
 	}
-	return c.send(m,nil)
+	return c.send(m,nil,nil,CcsMessage{})
 }
 
 // Listen blocks and connects to FCM waiting for messages, calling the handler
