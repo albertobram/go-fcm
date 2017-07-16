@@ -10,7 +10,7 @@ Documentation: http://godoc.org/github.com/mcilloni/go-fcm
 
 ## Installation
 
-    $ go get github.com/mcilloni/go-fcm
+    $ go get github.com/albertobram/go-fcm
 
 ## Status
 
